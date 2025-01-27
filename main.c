@@ -45,7 +45,11 @@ I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef huart1;
 
-osThreadId defaultTaskHandle;
+//osThreadId defaultTaskHandle;
+
+osThreadId configurationTaskHandle;
+osThreadId heartBeat_Spo2TaskHandle;
+osThreadId sensorStandbyMonitorTaskHandle;
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -120,8 +124,13 @@ int main(void)
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
-  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+  //osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+  osThreadDef(configurationTask,MAX30102_Configuration, osPriorityNormal, 0, 128);
+
+  configurationTaskHandle = osThreadCreate(osThread(configurationTask), NULL);
+  if(configurationTaskHandle != NULL) osStatus osThreadTerminate(osThreadid configurationtaskHandle);
+
+  //defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -293,7 +302,7 @@ void StartDefaultTask(void const * argument)
 }
 
 
-void MAX30102_Configuration(){
+void MAX30102_Configuration(void const * argument){
 	osMutexWait(i2cMutex, osWaitForever);
 	char message[64];
 	snprintf(message, sizeof(message), "Setting UP MAX30102 Sensor....\n");
