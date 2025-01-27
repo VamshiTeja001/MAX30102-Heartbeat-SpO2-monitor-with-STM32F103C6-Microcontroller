@@ -59,7 +59,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
-void StartDefaultTask(void const * argument);
+//void StartDefaultTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -126,9 +126,10 @@ int main(void)
   /* definition and creation of defaultTask */
   //osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
   osThreadDef(configurationTask,MAX30102_Configuration, osPriorityNormal, 0, 128);
-
+  osThreadDef(heartBeat_Spo2Task, MAX30102_Heartbeat_SpO2,osPriorityNormal, 0, 128 );
   configurationTaskHandle = osThreadCreate(osThread(configurationTask), NULL);
   if(configurationTaskHandle != NULL) osStatus osThreadTerminate(osThreadid configurationtaskHandle);
+  heartBeat_Spo2TaskHandle= osThreadCreate(osThread(heartBeat_Spo2Task), NULL);
 
   //defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
@@ -325,16 +326,97 @@ void MAX30102_Configuration(void const * argument){
 
 
 
-
-void ISR(void *argument){
-	int ITRPT = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
-	if (!ITRPT){
+////////////////////Process Heartbeat and Spo2
 
 
 
+void MAX30102_Heartbeat_SpO2(void *argument) {
+    while (1) {  // Infinite loop to keep the thread alive
+        osMutexWait(i2cMutex, osWaitForever);
 
-	}
+        // Check if the interrupt pin is low
+        int ITRPT = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+        if (!ITRPT) {
+            // Read data from the MAX30102 FIFO
+            max30102_read_fifo(max30102);
+
+            // Access IR and RED samples
+            uint32_t *IR_samples = max30102->_ir_samples;
+            uint32_t *RED_samples = max30102->_red_samples;
+
+            // Calculate heart rate
+            float bpm = calculate_heartbeat(IR_samples, 32, 100); // Assuming 100 Hz sampling rate
+
+            // Print heart rate
+            char message[64];
+            snprintf(message, sizeof(message), "Heart Rate: %.2f BPM\n", bpm);
+            HAL_UART_Transmit(&huart1, (uint8_t *)message, strlen(message), HAL_MAX_DELAY);
+
+            // Calculate SpO2
+            float spo2 = calculate_spo2(IR_samples, RED_samples, 32);
+
+            // Print SpO2
+            snprintf(message, sizeof(message), "SpO2: %.2f%%\n", spo2);
+            HAL_UART_Transmit(&huart1, (uint8_t *)message, strlen(message), HAL_MAX_DELAY);
+        }
+
+        // Release the mutex to allow other threads to access I2C
+        osMutexRelease(i2cMutex);
+
+        // Add a delay to prevent hogging the CPU
+        osDelay(100);  // 100 ms delay
+    }
 }
+
+
+		// Function to calculate heart rate (BPM)
+		float calculate_heartbeat(uint32_t *ir_samples, int num_samples, int sampling_rate) {
+		    int peak_count = 0;
+		    float total_interval = 0;
+
+		    for (int i = 1; i < num_samples - 1; i++) {
+		        if (ir_samples[i] > ir_samples[i - 1] && ir_samples[i] > ir_samples[i + 1] &&
+		            ir_samples[i] > 1000) { // Threshold to detect valid peaks
+		            peak_count++;
+		        }
+		    }
+
+		    if (peak_count > 1) {
+		        float time_between_peaks = (float)(num_samples) / (float)sampling_rate;
+		        float bpm = (peak_count / time_between_peaks) * 60;
+		        return bpm;
+		    }
+		    return 0.0; // Return 0 if no valid peaks detected
+		}
+
+		// Function to calculate SpO2
+		float calculate_spo2(uint32_t *ir_samples, uint32_t *red_samples, int num_samples) {
+		    float red_dc = 0, ir_dc = 0;
+		    float red_ac = 0, ir_ac = 0;
+
+		    // Calculate DC and AC components
+		    for (int i = 0; i < num_samples; i++) {
+		        red_dc += red_samples[i];
+		        ir_dc += ir_samples[i];
+		    }
+		    red_dc /= num_samples;
+		    ir_dc /= num_samples;
+
+		    for (int i = 0; i < num_samples; i++) {
+		        red_ac += fabs(red_samples[i] - red_dc);
+		        ir_ac += fabs(ir_samples[i] - ir_dc);
+		    }
+		    red_ac /= num_samples;
+		    ir_ac /= num_samples;
+
+		    // Calculate SpO2 ratio
+		    float ratio = (red_ac / red_dc) / (ir_ac / ir_dc);
+		    float spo2 = 110 - (25 * ratio); // Typical calibration equation
+		    return (spo2 > 100.0) ? 100.0 : ((spo2 < 0.0) ? 0.0 : spo2);
+		}
+
+
+
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None
